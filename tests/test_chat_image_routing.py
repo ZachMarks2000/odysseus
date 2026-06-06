@@ -1,3 +1,4 @@
+import inspect
 import sys
 for mod_name in ["src.endpoint_resolver", "src.database", "core.database"]:
     _mod = sys.modules.get(mod_name)
@@ -86,3 +87,10 @@ def test_matching_image_endpoint_routes_selected_image_model(monkeypatch):
     monkeypatch.setattr(chat_routes, "SessionLocal", lambda: db)
 
     assert chat_routes._is_image_generation_session(_session(model="sdxl-local"))
+
+
+def test_image_generation_stream_emits_progress_while_waiting():
+    body = inspect.getsource(chat_routes.setup_chat_routes)
+
+    assert 'json.dumps({"type": "tool_progress", "tool": "generate_image"' in body
+    assert "asyncio.wait_for(asyncio.shield(_img_task), timeout=5.0)" in body

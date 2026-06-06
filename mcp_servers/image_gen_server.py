@@ -84,6 +84,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         url, model_id, headers = _resolve_model(model_spec)
 
         is_gpt_image = "gpt-image" in model_id.lower()
+        is_dalle = "dall-e" in model_id.lower()
+        is_local_diffusion = not is_gpt_image and not is_dalle
         base_url = url.replace("/chat/completions", "").replace("/v1/messages", "").rstrip("/")
         images_url = base_url + "/images/generations"
 
@@ -91,12 +93,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         valid_dalle3_sizes = {"1024x1024", "1024x1792", "1792x1024"}
         if is_gpt_image and size not in valid_gpt_sizes:
             size = "1024x1024"
-        elif not is_gpt_image and size not in valid_dalle3_sizes:
+        elif is_dalle and size not in valid_dalle3_sizes:
             size = "1024x1024"
 
         payload = {"model": model_id, "prompt": prompt, "n": 1, "size": size}
         if is_gpt_image:
             payload["quality"] = quality if quality in ("low", "medium", "high", "auto") else "medium"
+        if is_local_diffusion:
+            payload["quality"] = quality if quality in ("low", "medium", "high", "auto") else "medium"
+            payload["steps"] = {"low": 4, "medium": 10, "high": 20, "auto": 10}.get(payload["quality"], 10)
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)) as client:
             resp = await client.post(images_url, json=payload, headers=headers)

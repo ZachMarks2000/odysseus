@@ -947,7 +947,19 @@ def setup_chat_routes(
                 _user_msg = message or ""
                 yield f'data: {json.dumps({"type": "tool_start", "tool": "generate_image", "command": _user_msg[:100]})}\n\n'
                 yield ": heartbeat\n\n"
-                _img_result = await do_generate_image(f"{_user_msg}\n{sess.model}", session, owner=_user)
+                _img_started = time.time()
+                _img_task = asyncio.create_task(do_generate_image(f"{_user_msg}\n{sess.model}", session, owner=_user))
+                try:
+                    while True:
+                        try:
+                            _img_result = await asyncio.wait_for(asyncio.shield(_img_task), timeout=5.0)
+                            break
+                        except asyncio.TimeoutError:
+                            _elapsed = int(time.time() - _img_started)
+                            yield f'data: {json.dumps({"type": "tool_progress", "tool": "generate_image", "tail": f"Generating image... {_elapsed}s elapsed"})}\n\n'
+                except (asyncio.CancelledError, GeneratorExit):
+                    _img_task.cancel()
+                    raise
                 _img_output = _img_result.get("results", _img_result.get("error", ""))
                 _img_tool_data = {"type": "tool_output", "tool": "generate_image", "command": _user_msg[:100], "output": _img_output, "exit_code": 0 if "error" not in _img_result else 1}
                 for _k in ("image_url", "image_id", "image_prompt", "image_model", "image_size", "image_quality"):

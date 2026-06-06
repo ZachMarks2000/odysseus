@@ -1687,6 +1687,10 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
         else:
             payload["quality"] = "medium"
 
+    if is_local_diffusion:
+        step_quality = payload.get("quality", "medium")
+        payload["steps"] = {"low": 4, "medium": 10, "high": 20, "auto": 10}.get(step_quality, 10)
+
     logger.info(f"Image generation: model={model_id}, size={size}, quality={quality}, prompt={prompt[:80]}")
 
     try:

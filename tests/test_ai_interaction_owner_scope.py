@@ -28,6 +28,15 @@ def test_model_listing_and_image_fallback_are_owner_scoped():
     assert "_resolve_model(model_spec, owner=owner)" in image_body
 
 
+def test_local_image_generation_requests_include_steps():
+    image_body = _source(ai_interaction.do_generate_image)
+
+    assert "is_local_diffusion = not is_gpt_image and not is_dalle" in image_body
+    assert '"low": 4' in image_body
+    assert '"medium": 10' in image_body
+    assert '"high": 20' in image_body
+
+
 @pytest.mark.parametrize("tool,content", [
     ("chat_with_model", "gpt-test\nhello"),
     ("pipeline", "gpt-test | summarize this"),
