@@ -33,7 +33,7 @@ async def list_tools() -> list[Tool]:
                     "prompt": {"type": "string", "description": "Image description prompt"},
                     "model": {"type": "string", "description": "Model name (auto-detects if omitted)"},
                     "size": {"type": "string", "description": "Image size (default 1024x1024)"},
-                    "quality": {"type": "string", "description": "Quality: low, medium, high, auto (default medium)"},
+                    "quality": {"type": "string", "description": "Quality: low, medium, high, xhigh, auto (default medium)"},
                 },
                 "required": ["prompt"],
             },
@@ -98,10 +98,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         payload = {"model": model_id, "prompt": prompt, "n": 1, "size": size}
         if is_gpt_image:
-            payload["quality"] = quality if quality in ("low", "medium", "high", "auto") else "medium"
+            if quality in ("low", "medium", "high", "auto"):
+                payload["quality"] = quality
+            elif quality == "xhigh":
+                payload["quality"] = "high"
+            else:
+                payload["quality"] = "medium"
         if is_local_diffusion:
-            payload["quality"] = quality if quality in ("low", "medium", "high", "auto") else "medium"
-            payload["steps"] = {"low": 4, "medium": 10, "high": 20, "auto": 10}.get(payload["quality"], 10)
+            payload["quality"] = quality if quality in ("low", "medium", "high", "xhigh", "auto") else "medium"
+            payload["steps"] = {"low": 4, "medium": 10, "high": 20, "xhigh": 30, "auto": 10}.get(payload["quality"], 10)
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)) as client:
             resp = await client.post(images_url, json=payload, headers=headers)

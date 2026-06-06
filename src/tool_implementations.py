@@ -953,7 +953,7 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
             return _ALIASES_SET.get(k2, (k or "").strip())
 
         _ENUMS = {
-            "image_quality": ["low", "medium", "high"],
+            "image_quality": ["low", "medium", "high", "xhigh"],
             "reminder_channel": ["browser", "email", "ntfy", "webhook"],
         }
         def _coerce(value, default):

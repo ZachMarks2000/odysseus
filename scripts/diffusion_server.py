@@ -489,7 +489,7 @@ def generate_image(req: ImageRequest):
 
     # Map quality to num_inference_steps
     default_steps = _args.steps or 8
-    steps_map = {"low": 4, "medium": default_steps, "high": 20, "auto": 12}
+    steps_map = {"low": 4, "medium": 10, "high": 20, "xhigh": 30, "auto": 10}
     steps = steps_map.get(req.quality, default_steps)
 
     logger.info(f"Generating: {req.prompt[:80]}... ({width}x{height}, {steps} steps)")

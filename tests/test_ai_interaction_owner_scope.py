@@ -35,6 +35,7 @@ def test_local_image_generation_requests_include_steps():
     assert '"low": 4' in image_body
     assert '"medium": 10' in image_body
     assert '"high": 20' in image_body
+    assert '"xhigh": 30' in image_body
 
 
 @pytest.mark.parametrize("tool,content", [

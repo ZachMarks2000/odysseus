@@ -1577,7 +1577,7 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
       Line 1: prompt describing the image
       Line 2: model name (optional, default auto-detects: prefers gpt-image-1.5 > gpt-image-1)
       Line 3: size (optional, defaults to 1024x1024)
-      Line 4: quality (optional, defaults to medium — options: low, medium, high, auto)
+      Line 4: quality (optional, defaults to medium — options: low, medium, high, xhigh, auto)
     """
     import base64
     import httpx
@@ -1680,16 +1680,24 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
         "size": size,
     }
 
-    # GPT image models and local diffusion support quality; DALL-E does not
-    if is_gpt_image or is_local_diffusion:
+    # GPT image models and local diffusion support quality; DALL-E does not.
+    # xhigh is a local-only convenience that maps to more diffusion steps.
+    if is_gpt_image:
         if quality in ("low", "medium", "high", "auto"):
+            payload["quality"] = quality
+        elif quality == "xhigh":
+            payload["quality"] = "high"
+        else:
+            payload["quality"] = "medium"
+    elif is_local_diffusion:
+        if quality in ("low", "medium", "high", "xhigh", "auto"):
             payload["quality"] = quality
         else:
             payload["quality"] = "medium"
 
     if is_local_diffusion:
         step_quality = payload.get("quality", "medium")
-        payload["steps"] = {"low": 4, "medium": 10, "high": 20, "auto": 10}.get(step_quality, 10)
+        payload["steps"] = {"low": 4, "medium": 10, "high": 20, "xhigh": 30, "auto": 10}.get(step_quality, 10)
 
     logger.info(f"Image generation: model={model_id}, size={size}, quality={quality}, prompt={prompt[:80]}")
 
