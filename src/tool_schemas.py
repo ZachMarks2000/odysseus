@@ -286,6 +286,23 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "generate_image",
+            "description": "Generate an AI image from a text prompt using the configured image model. Use when the user asks to create, draw, render, or generate an image, picture, illustration, artwork, logo, icon, or photo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Detailed description of the image to generate"},
+                    "model": {"type": "string", "description": "Optional image model name or model@endpoint_name. Omit to use the configured image model."},
+                    "size": {"type": "string", "description": "Optional output size such as 1024x1024, 1024x1536, 1536x1024, or auto"},
+                    "quality": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "auto"], "description": "Optional quality/speed setting"}
+                },
+                "required": ["prompt"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_session",
             "description": "Create a new chat for ongoing conversations with a specific model. (The UI calls these 'chats'; 'session' is the internal term.)",
             "parameters": {
@@ -1286,6 +1303,11 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
         content = args.get("query", "")
     elif tool_type == "chat_with_model":
         content = args.get("model", "") + "\n" + args.get("message", "")
+    elif tool_type == "generate_image":
+        parts = [args.get("prompt", "")]
+        for key in ("model", "size", "quality"):
+            parts.append(args.get(key, ""))
+        content = "\n".join(parts).rstrip()
     elif tool_type == "create_session":
         content = args.get("name", "Untitled") + "\n" + args.get("model", "")
     elif tool_type == "list_sessions":

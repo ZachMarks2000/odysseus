@@ -382,6 +382,13 @@ class ToolIndex:
                    "different model", "compare answers", "compare models",
                    "delegate to", "have model"}):
             {"chat_with_model", "ask_teacher", "list_models"},
+        # Image generation intent. Keep this explicit so the keyword fallback
+        # still exposes generate_image if semantic tool retrieval is unavailable.
+        frozenset({"generate image", "generate an image", "create image",
+                   "create an image", "make image", "make an image",
+                   "draw", "illustration", "artwork", "logo", "icon",
+                   "picture", "photo", "render"}):
+            {"generate_image"},
         # Deep research intent (incl. common typo "reserach")
         frozenset({"research", "reserach", "reasearch", "look into", "investigate",
                    "deep dive", "deep research", "find out about", "study up on",
