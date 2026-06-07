@@ -12,6 +12,7 @@ import json
 import logging
 import uuid
 import time
+import asyncio
 from typing import Dict, Optional, Tuple
 
 from src.constants import GENERATED_IMAGES_DIR
@@ -1793,6 +1794,422 @@ async def do_generate_image(content: str, session_id: Optional[str] = None, owne
         return {"error": f"Image generation error: {str(e)}"}
 
 
+async def do_edit_generated_image(content: str, session_id: Optional[str] = None, owner: Optional[str] = None) -> Dict:
+    """Edit an existing/generated image using an OpenAI-compatible image edit API.
+
+    Content format (preferred JSON):
+      {"prompt": "...", "image_id": "optional/latest", "model": "optional", "size": "optional", "quality": "optional"}
+
+    Legacy line format:
+      Line 1: edit prompt
+      Line 2: source image id (optional, "latest" by default)
+      Line 3: model name (optional)
+      Line 4: size (optional)
+      Line 5: quality (optional)
+    """
+    import base64
+    import mimetypes
+    import re
+    import httpx
+    from pathlib import Path
+
+    raw = (content or "").strip()
+    args = None
+    if raw.startswith("{"):
+        try:
+            args = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            args = None
+    if not isinstance(args, dict):
+        lines = raw.split("\n")
+        args = {
+            "prompt": lines[0].strip() if lines else "",
+            "image_id": lines[1].strip() if len(lines) > 1 else "",
+            "model": lines[2].strip() if len(lines) > 2 else "",
+            "size": lines[3].strip() if len(lines) > 3 else "",
+            "quality": lines[4].strip() if len(lines) > 4 else "",
+        }
+
+    prompt = str(args.get("prompt") or "").strip()
+    source_ref = str(
+        args.get("image_id")
+        or args.get("source_image_id")
+        or args.get("image_url")
+        or ""
+    ).strip()
+    model_spec = str(args.get("model") or "").strip()
+    size = str(args.get("size") or "").strip()
+    quality = str(args.get("quality") or "medium").strip() or "medium"
+
+    if not prompt:
+        return {"error": "Image edit prompt is required"}
+
+    try:
+        from src.settings import load_settings
+        _settings = load_settings()
+    except Exception:
+        _settings = {}
+
+    if not model_spec:
+        model_spec = _settings.get("image_edit_model", "") or ""
+    if quality == "medium" and _settings.get("image_quality"):
+        quality = _settings["image_quality"]
+
+    def _extract_generated_filename(ref: str) -> str:
+        m = re.search(r"/api/generated-image/([A-Za-z0-9._-]+)", ref or "")
+        return m.group(1) if m else ""
+
+    def _is_image_meta(meta: dict) -> bool:
+        mime = str(meta.get("mime") or "").lower()
+        name = str(meta.get("name") or meta.get("original_name") or meta.get("id") or "").lower()
+        return mime.startswith("image/") or name.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
+
+    def _resolve_upload_source(upload_id: str):
+        if not upload_id:
+            return None, None, None, None, None
+        try:
+            from src.constants import BASE_DIR, UPLOAD_DIR
+            from src.upload_handler import UploadHandler
+
+            uh = UploadHandler(BASE_DIR, UPLOAD_DIR)
+            info = uh.resolve_upload(upload_id, owner=owner, allow_admin=False)
+            if not info or not _is_image_meta(info):
+                return None, None, None, None, None
+            path = Path(info["path"])
+            return info, path, path.read_bytes(), f"upload:{info.get('id') or upload_id}", None
+        except Exception as e:
+            return None, None, None, None, f"Attached image '{upload_id}' is unavailable: {e}"
+
+    def _latest_attached_image_source(current_turn_only: bool = False):
+        if not session_id or not _session_manager:
+            return None, None, None, None, None
+        try:
+            sess = _session_manager.get_session(session_id)
+        except Exception:
+            return None, None, None, None, None
+        for msg in reversed(getattr(sess, "history", []) or []):
+            if getattr(msg, "role", None) != "user":
+                continue
+            meta = getattr(msg, "metadata", None) or {}
+            for att in reversed(meta.get("attachments") or []):
+                if not isinstance(att, dict) or not _is_image_meta(att):
+                    continue
+                upload_id = str(att.get("id") or "").strip()
+                info, path, data, label, error = _resolve_upload_source(upload_id)
+                if error:
+                    return None, None, None, None, error
+                if data:
+                    return info, path, data, label, None
+            if current_turn_only:
+                return None, None, None, None, None
+        return None, None, None, None, None
+
+    def _latest_generated_image_ref_from_history() -> str:
+        if not session_id or not _session_manager:
+            return ""
+        try:
+            sess = _session_manager.get_session(session_id)
+        except Exception:
+            return ""
+        for msg in reversed(getattr(sess, "history", []) or []):
+            meta = getattr(msg, "metadata", None) or {}
+            events = meta.get("tool_events") or []
+            for event in reversed(events):
+                if not isinstance(event, dict):
+                    continue
+                if event.get("tool") not in {"generate_image", "edit_generated_image"}:
+                    continue
+                image_url = str(event.get("image_url") or "").strip()
+                if _extract_generated_filename(image_url):
+                    return image_url
+                image_id = str(event.get("image_id") or "").strip()
+                if image_id:
+                    return image_id
+                if image_url:
+                    return image_url
+        return ""
+
+    def _source_filename(source_obj, fallback_path: Path) -> str:
+        if isinstance(source_obj, dict):
+            return str(source_obj.get("name") or source_obj.get("original_name") or source_obj.get("id") or fallback_path.name)
+        return str(getattr(source_obj, "filename", None) or fallback_path.name)
+
+    def _source_size(source_obj):
+        if isinstance(source_obj, dict):
+            w, h = source_obj.get("width"), source_obj.get("height")
+            return f"{w}x{h}" if w and h else None
+        return getattr(source_obj, "size", None)
+
+    def _source_identifier(source_obj, label: str = "") -> str:
+        if isinstance(source_obj, dict):
+            return str(source_obj.get("id") or label or "attachment")
+        return str(getattr(source_obj, "id", None) or label or "image")
+
+    def _load_source_image():
+        from src.database import SessionLocal as _SL, GalleryImage
+        from src.generated_images import resolve_generated_image_path
+
+        _db = _SL()
+        try:
+            q = _db.query(GalleryImage).filter(GalleryImage.is_active == True)
+            if owner:
+                q = q.filter(GalleryImage.owner == owner)
+
+            def _resolve_gallery_ref(ref: str):
+                filename = _extract_generated_filename(ref)
+                row = q.filter(GalleryImage.id == ref).first()
+                if row is None and filename:
+                    row = q.filter(GalleryImage.filename == filename).first()
+                if row is not None:
+                    try:
+                        path = resolve_generated_image_path(row.filename)
+                    except Exception as e:
+                        return row, None, None, None, f"Source image file is unavailable: {e}"
+                    return row, path, path.read_bytes(), _source_identifier(row), None
+                if filename:
+                    try:
+                        path = resolve_generated_image_path(filename)
+                    except Exception as e:
+                        return None, None, None, None, f"Source image file is unavailable: {e}"
+                    return {"id": filename, "name": filename}, path, path.read_bytes(), filename, None
+                return None, None, None, None, None
+
+            row = None
+            if source_ref and source_ref.lower() not in {"latest", "last", "previous"}:
+                row, path, data, label, error = _resolve_gallery_ref(source_ref)
+                if error:
+                    return row, path, data, label, error
+                if data:
+                    return row, path, data, label, None
+                else:
+                    info, path, data, label, error = _resolve_upload_source(source_ref)
+                    if error:
+                        return None, None, None, None, error
+                    if data:
+                        return info, path, data, label, None
+                    return None, None, None, None, f"Source image '{source_ref}' was not found in the gallery or uploads."
+            else:
+                info, path, data, label, error = _latest_attached_image_source(current_turn_only=True)
+                if error:
+                    return None, None, None, None, error
+                if data:
+                    return info, path, data, label, None
+
+                history_ref = _latest_generated_image_ref_from_history()
+                if history_ref:
+                    row, path, data, label, error = _resolve_gallery_ref(history_ref)
+                    if error:
+                        return row, path, data, label, error
+                    if data:
+                        return row, path, data, label, None
+
+                latest_q = q
+                if session_id:
+                    latest_q = latest_q.filter(GalleryImage.session_id == session_id)
+                row = (
+                    latest_q
+                    .filter(GalleryImage.filename.ilike("%.png") | GalleryImage.filename.ilike("%.jpg") | GalleryImage.filename.ilike("%.jpeg") | GalleryImage.filename.ilike("%.webp"))
+                    .order_by(GalleryImage.updated_at.desc(), GalleryImage.created_at.desc())
+                    .first()
+                )
+                if row is None and session_id:
+                    row = (
+                        q
+                        .filter(GalleryImage.filename.ilike("%.png") | GalleryImage.filename.ilike("%.jpg") | GalleryImage.filename.ilike("%.jpeg") | GalleryImage.filename.ilike("%.webp"))
+                        .order_by(GalleryImage.updated_at.desc(), GalleryImage.created_at.desc())
+                        .first()
+                    )
+                if row is None:
+                    info, path, data, label, error = _latest_attached_image_source()
+                    if error:
+                        return None, None, None, None, error
+                    if data:
+                        return info, path, data, label, None
+                    return None, None, None, None, "No previous generated or attached image found to edit."
+
+            try:
+                path = resolve_generated_image_path(row.filename)
+            except Exception as e:
+                return row, None, None, None, f"Source image file is unavailable: {e}"
+            return row, path, path.read_bytes(), _source_identifier(row), None
+        finally:
+            _db.close()
+
+    source_row, source_path, source_bytes, source_label, source_error = await asyncio.to_thread(_load_source_image)
+    if source_error:
+        return {"error": source_error}
+
+    if not model_spec:
+        for candidate in ("qwen-image-edit-bf16", "qwen-image-edit", "flux-kontext-dev", "gpt-image-1.5", "gpt-image-1"):
+            try:
+                _resolve_model(candidate, owner=owner)
+                model_spec = candidate
+                break
+            except ValueError:
+                continue
+        if not model_spec:
+            try:
+                from src.database import SessionLocal, ModelEndpoint
+                from src.auth_helpers import owner_filter
+                import httpx as _req
+                _idb = SessionLocal()
+                try:
+                    _img_q = _idb.query(ModelEndpoint).filter(
+                        ModelEndpoint.is_enabled == True,
+                        ModelEndpoint.model_type == "image",
+                    )
+                    if owner:
+                        _img_q = owner_filter(_img_q, ModelEndpoint, owner)
+                    for _iep in _img_q.all():
+                        _ibase = _iep.base_url.rstrip("/")
+                        if not _ibase.endswith("/v1"):
+                            _ibase += "/v1"
+                        try:
+                            _r = _req.get(_ibase + "/models", timeout=3)
+                            _r.raise_for_status()
+                            _mids = [m.get("id") for m in (_r.json().get("data") or []) if m.get("id")]
+                            for _mid in _mids:
+                                _low = _mid.lower()
+                                if "edit" in _low or "kontext" in _low:
+                                    model_spec = _mid
+                                    break
+                            if model_spec:
+                                break
+                        except Exception:
+                            continue
+                finally:
+                    _idb.close()
+            except Exception:
+                pass
+        if not model_spec:
+            return {"error": "No image edit model found. Set image_edit_model in settings.json or add an image-edit endpoint."}
+
+    try:
+        url, model_id, headers = _resolve_model(model_spec, owner=owner)
+    except ValueError:
+        return {"error": f"No endpoint found with image edit model '{model_spec}'."}
+
+    base_url = url.replace("/chat/completions", "").replace("/v1/messages", "").rstrip("/")
+    edits_url = base_url + "/images/edits"
+    model_lc = model_id.lower()
+    is_gpt_image = "gpt-image" in model_lc
+
+    form = {
+        "model": model_id,
+        "prompt": prompt,
+        "response_format": "b64_json",
+    }
+    if size:
+        form["size"] = size
+    if is_gpt_image:
+        form["quality"] = quality if quality in ("low", "medium", "high", "auto") else "medium"
+    else:
+        form["steps"] = str({"low": 4, "medium": 10, "high": 20, "xhigh": 30, "auto": 10}.get(quality, 10))
+
+    content_type = mimetypes.guess_type(str(source_path))[0] or "image/png"
+    files = {
+        "image": (_source_filename(source_row, source_path), source_bytes, content_type)
+    }
+
+    logger.info(
+        "Image edit: model=%s, source=%s, size=%s, quality=%s, prompt=%s",
+        model_id,
+        _source_identifier(source_row, source_label),
+        size or "auto",
+        quality,
+        prompt[:80],
+    )
+
+    edit_timeout_seconds = 900.0
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30.0, read=edit_timeout_seconds, write=30.0, pool=30.0)) as client:
+            resp = await client.post(edits_url, data=form, files=files, headers=headers)
+
+            if resp.status_code != 200:
+                error_text = resp.text[:500]
+                try:
+                    err_json = resp.json()
+                    error_text = err_json.get("error", {}).get("message", error_text) if isinstance(err_json.get("error"), dict) else str(err_json.get("error", error_text))
+                except Exception:
+                    pass
+                return {"error": f"Image edit failed ({resp.status_code}): {error_text}"}
+
+            data = resp.json()
+            images = data.get("data", [])
+            if not images:
+                return {"error": "No edited image returned from API"}
+
+            img = images[0]
+            image_url = None
+            image_id = None
+
+            def _save_to_gallery(filename: str) -> str:
+                try:
+                    from src.database import SessionLocal as _GallerySL, GalleryImage
+                    new_id = str(uuid.uuid4())
+                    _gdb = _GallerySL()
+                    _gdb.add(GalleryImage(
+                        id=new_id,
+                        filename=filename,
+                        prompt=f"Edit of {_source_identifier(source_row, source_label)}: {prompt}",
+                        model=model_id,
+                        size=size or _source_size(source_row),
+                        quality=quality,
+                        session_id=session_id,
+                        owner=owner,
+                    ))
+                    _gdb.commit()
+                    _gdb.close()
+                    return new_id
+                except Exception as _ge:
+                    logger.warning(f"Failed to save edited gallery record: {_ge}")
+                    return ""
+
+            if img.get("b64_json"):
+                img_dir = Path("data/generated_images")
+                img_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"{uuid.uuid4().hex[:12]}.png"
+                img_path = img_dir / filename
+                img_path.write_bytes(base64.b64decode(img.get("b64_json")))
+                image_url = f"/api/generated-image/{filename}"
+                image_id = _save_to_gallery(filename)
+            elif img.get("url"):
+                try:
+                    dl_resp = httpx.get(img["url"], timeout=60)
+                    if dl_resp.status_code == 200:
+                        img_dir = Path("data/generated_images")
+                        img_dir.mkdir(parents=True, exist_ok=True)
+                        filename = f"{uuid.uuid4().hex[:12]}.png"
+                        img_path = img_dir / filename
+                        img_path.write_bytes(dl_resp.content)
+                        image_url = f"/api/generated-image/{filename}"
+                        image_id = _save_to_gallery(filename)
+                    else:
+                        image_url = img["url"]
+                except Exception as _dl_e:
+                    logger.warning(f"Failed to download edited image: {_dl_e}")
+                    image_url = img["url"]
+            else:
+                return {"error": "Image edit API returned unexpected format (no b64_json or url)"}
+
+            return {
+                "results": f"Edited image for: {prompt[:100]}",
+                "image_url": image_url,
+                "image_id": image_id,
+                "source_image_id": _source_identifier(source_row, source_label),
+                "image_prompt": prompt,
+                "image_model": model_id,
+                "image_size": size or _source_size(source_row),
+                "image_quality": quality,
+            }
+
+    except httpx.TimeoutException:
+        return {"error": f"Image edit timed out ({int(edit_timeout_seconds)}s). The model may be overloaded — try again or use quality=low."}
+    except Exception as e:
+        return {"error": f"Image edit error: {str(e)}"}
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher (called from agent_tools.execute_tool_block)
 # ---------------------------------------------------------------------------
@@ -1850,6 +2267,17 @@ async def dispatch_ai_tool(
         problem = content.split("\n", 1)[-1].strip()[:60]
         desc = f"ask_teacher: {problem}"
         result = await do_ask_teacher(content, session_id, owner=owner)
+
+    elif tool == "edit_generated_image":
+        _prompt = content
+        try:
+            _parsed = json.loads(content) if content.strip().startswith("{") else None
+            if isinstance(_parsed, dict):
+                _prompt = str(_parsed.get("prompt") or "")
+        except Exception:
+            pass
+        desc = f"edit_generated_image: {_prompt.strip()[:60]}"
+        result = await do_edit_generated_image(content, session_id, owner=owner)
 
     else:
         desc = f"unknown ai tool: {tool}"

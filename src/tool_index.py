@@ -81,7 +81,8 @@ BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
     "edit_document": "Preferred tool for editing an existing document — targeted find-and-replace. Use for any small change: add a function, fix a bug, tweak a section, rename things.",
     "update_document": "Replace the entire active document content. ONLY for full rewrites (>50% changed). Do not use for small edits — use edit_document instead.",
     "suggest_document": "Suggest changes to the active document with explanations. For code review, proofreading, feedback requests.",
-    "generate_image": "Generate an AI image from a text prompt. Specify model, size, and quality. Art, illustrations, photos.",
+    "generate_image": "Generate a brand-new AI image from a text prompt. Specify model, size, and quality. Art, illustrations, photos.",
+    "edit_generated_image": "Edit an existing/generated/attached image with an image-edit model. Use for follow-up image tweaks: change colors, change text/title, adjust details, keep the same image but modify part of it, edit the latest generated or attached image.",
     "chat_with_model": "Send a message to a different AI model. Compare responses, get specialized help, delegate tasks.",
     "ask_teacher": "Ask a more capable model for help with a difficult problem. Escalate complex tasks.",
     "pipeline": "Run a multi-step AI pipeline with multiple models. Chain tasks together in sequence.",
@@ -389,6 +390,16 @@ class ToolIndex:
                    "draw", "illustration", "artwork", "logo", "icon",
                    "picture", "photo", "render"}):
             {"generate_image"},
+        frozenset({"edit image", "edit the image", "edit that image",
+                   "edit this image", "change the image", "modify image",
+                   "modify the image", "tweak image", "tweak the image",
+                   "latest image", "last image", "previous image",
+                   "same image", "keep the same image", "make it more",
+                   "make it less", "change the shirt", "change its",
+                   "change her", "change him", "change the photo",
+                   "change the picture", "change the title", "change title",
+                   "edit attached image", "attached image", "attached photo"}):
+            {"edit_generated_image", "generate_image"},
         # Deep research intent (incl. common typo "reserach")
         frozenset({"research", "reserach", "reasearch", "look into", "investigate",
                    "deep dive", "deep research", "find out about", "study up on",

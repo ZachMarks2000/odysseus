@@ -71,6 +71,7 @@ _AGENT_RULES = """\
 - For web lookup/search/latest/current requests, use `web_search` or `web_fetch`. Do NOT use `bash`, `python`, `curl`, `requests`, or scraping code for web lookup unless web tools are disabled or already failed.
 - These exact tags execute automatically. For showing code examples, use ```shell, ```sh, ```py, etc. instead.
 - Multiple tool blocks per response OK. 60s timeout per tool, 10K char output limit.
+- Image requests: use `generate_image` for a brand-new image. Use `edit_generated_image` for follow-up tweaks to an existing/generated image or an image the user just attached ("make it brighter", "change the title", "keep the same image but...").
 - Code/content >15 lines → ```create_document (NOT in chat). Short snippets OK in chat.
 - Editing an existing document: ALWAYS use ```edit_document with FIND/REPLACE blocks. Do NOT rewrite the whole document with ```update_document unless genuinely changing more than half of it.
 - BIAS TOWARD ACTION on edit requests. If the user says "edit out X", "remove the Y paragraph", "change Z" — JUST DO IT with your best interpretation. Don't ask for clarification on minor ambiguity. The user can undo or re-prompt if wrong.
@@ -118,6 +119,7 @@ _API_AGENT_RULES = """\
 - For web lookup/search/latest/current requests, call `web_search` or `web_fetch`. Do NOT use shell, Python, curl, requests, or scraping code for web lookup unless web tools are unavailable or already failed.
 - Keep answers concise unless the user asks for depth.
 - For long code or content, use document tools instead of pasting large blocks into chat.
+- For image requests: use `generate_image` for a brand-new image. Use `edit_generated_image` for follow-up tweaks to an existing/generated image or an image the user just attached ("make it brighter", "change the title", "keep the same image but...").
 - Editing an existing document: ALWAYS use `edit_document` with find/replace. Only use `update_document` for genuine full rewrites (>50% changed) — do NOT echo the entire file back for small edits.
 - If the active editor document is an email draft/compose window, treat that open email as the target for "write this", "write the email", "reply with...", "make it say...", "draft this", and similar requests. Do NOT create another document, search/list/manage documents, or open a different reply unless the user explicitly asks. Edit the open email draft with `edit_document` or `update_document`; preserve To/Cc/Bcc/Subject/In-Reply-To/References/X-* header lines unless the user asks to change them.
 - "Give suggestions / feedback / review / how can I improve this / what would make it better" about the OPEN document → call `suggest_document`, do NOT write a prose list of ideas in chat. It creates inline accept/reject bubbles on the doc. Give concrete `find`/`replace`/`reason` items. To suggest an ADDITION (e.g. "add a bow to the SVG", a new section), set `find` to a short existing anchor snippet and `replace` to that same snippet PLUS the new content. Only answer in prose when no document is open, or the request is purely conceptual with no concrete change to propose.
@@ -391,6 +393,12 @@ Suggest changes with explanations (for review/feedback requests).""",
 <quality>
 ```
 Generate an image. Line 1 = description, line 2 = model name, line 3 = WxH (e.g. 1024x1024), line 4 = quality.""",
+
+    "edit_generated_image": """\
+```edit_generated_image
+{"prompt": "<edit instruction>", "image_id": "<optional gallery image id or latest>", "model": "<optional edit model>", "size": "<optional WxH>", "quality": "<low|medium|high|xhigh|auto>"}
+```
+Edit an existing/generated/attached image using an image-edit model. Use for follow-up tweaks that should preserve the source image. If image_id is omitted or "latest", edits the latest generated image in this chat, falling back to the latest attached image.""",
 
     "chat_with_model": "- ```chat_with_model``` — Ask a DIFFERENT AI model and relay its answer. Line 1 = model name (or 'model@endpoint'), rest = your message. Use when the user says 'ask <model>', 'what does <model> think', or wants to compare/their answer from another model.",
     "ask_teacher": "- ```ask_teacher``` — Escalate a hard question to a more capable model. Line 1 = model name or 'auto', rest = the question. Use when stuck or need expert knowledge.",
@@ -1274,6 +1282,7 @@ def _build_base_prompt(
     disabled = set(disabled_tools or [])
     if not get_setting("image_gen_enabled", True):
         disabled.add("generate_image")
+        disabled.add("edit_generated_image")
 
     if relevant_tools is not None:
         # RAG mode: include always-available + retrieved + admin (if needed)
@@ -1287,7 +1296,7 @@ def _build_base_prompt(
         if not needs_admin:
             # At least strip the management section
             mgmt_tools = set(TOOL_SECTIONS.keys()) - set(ALWAYS_AVAILABLE) - {
-                "generate_image", "suggest_document",
+                "generate_image", "edit_generated_image", "suggest_document",
                 "chat_with_model", "ask_teacher", "list_models",
             }
             agent_prompt = _assemble_prompt(
@@ -2781,8 +2790,8 @@ async def stream_agent_loop(
                 for k in ("toggle_name", "state", "mode", "model", "endpoint_url", "theme_name", "colors"):
                     if k in result:
                         tool_output_data[k] = result[k]
-            # Forward image data from generate_image tool
-            for k in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
+            # Forward image data from image generation/edit tools
+            for k in ("image_url", "image_id", "image_prompt", "image_model", "image_size", "image_quality"):
                 if k in result:
                     tool_output_data[k] = result[k]
             # Forward screenshots from browser tools (base64 images)
@@ -2841,7 +2850,7 @@ async def stream_agent_loop(
                 "exit_code": result.get("exit_code"),
             }
             if result.get("image_url"):
-                for ik in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
+                for ik in ("image_url", "image_id", "image_prompt", "image_model", "image_size", "image_quality"):
                     if result.get(ik):
                         tool_event[ik] = result[ik]
             if result.get("doc_id"):

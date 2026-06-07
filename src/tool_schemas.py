@@ -303,6 +303,24 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "edit_generated_image",
+            "description": "Edit an existing/generated/attached image using the configured image-edit model. Use for follow-up tweaks that should preserve the source image, including changing text/title, colors, adding/removing details, or modifying an image the user just attached.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Instruction describing the edit to apply while preserving the source image"},
+                    "image_id": {"type": "string", "description": "Optional gallery image id or upload id to edit. Omit or use 'latest' for the latest generated image in the current chat, falling back to the latest attached image."},
+                    "model": {"type": "string", "description": "Optional image-edit model name or model@endpoint_name. Omit to use the configured image_edit_model or auto-detect an edit model."},
+                    "size": {"type": "string", "description": "Optional output size such as 1024x1024. Omit to let the edit server decide."},
+                    "quality": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "auto"], "description": "Optional quality/speed setting"}
+                },
+                "required": ["prompt"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_session",
             "description": "Create a new chat for ongoing conversations with a specific model. (The UI calls these 'chats'; 'session' is the internal term.)",
             "parameters": {
@@ -1308,6 +1326,8 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
         for key in ("model", "size", "quality"):
             parts.append(args.get(key, ""))
         content = "\n".join(parts).rstrip()
+    elif tool_type == "edit_generated_image":
+        content = json.dumps(args)
     elif tool_type == "create_session":
         content = args.get("name", "Untitled") + "\n" + args.get("model", "")
     elif tool_type == "list_sessions":
