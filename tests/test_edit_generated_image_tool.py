@@ -134,10 +134,13 @@ def test_edit_generated_image_falls_back_to_latest_attached_image(monkeypatch, t
     import src.ai_interaction as ai_interaction
     import src.constants as constants
     import src.database as database
+    import src.generated_images as generated_images
 
     upload_id = "a" * 32 + ".png"
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()
+    generated_dir = tmp_path / "data" / "generated_images"
+    generated_dir.mkdir(parents=True)
     source_path = upload_dir / upload_id
     source_path.write_bytes(b"source-image")
     (upload_dir / "uploads.json").write_text(
@@ -169,6 +172,8 @@ def test_edit_generated_image_falls_back_to_latest_attached_image(monkeypatch, t
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(constants, "BASE_DIR", str(tmp_path) + "/")
     monkeypatch.setattr(constants, "UPLOAD_DIR", str(upload_dir))
+    monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", generated_dir)
+    monkeypatch.setattr(ai_interaction, "GENERATED_IMAGES_DIR", str(generated_dir))
     monkeypatch.setattr(database, "SessionLocal", lambda: fake_db)
     monkeypatch.setattr(database, "GalleryImage", _FakeGalleryImage, raising=False)
     monkeypatch.setattr(
@@ -206,6 +211,7 @@ def test_edit_generated_image_prefers_latest_generated_tool_event(monkeypatch, t
     import httpx
     import src.ai_interaction as ai_interaction
     import src.database as database
+    import src.generated_images as generated_images
 
     generated_dir = tmp_path / "data" / "generated_images"
     generated_dir.mkdir(parents=True)
@@ -237,6 +243,8 @@ def test_edit_generated_image_prefers_latest_generated_tool_event(monkeypatch, t
     fake_db = _FakeDb()
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", generated_dir)
+    monkeypatch.setattr(ai_interaction, "GENERATED_IMAGES_DIR", str(generated_dir))
     monkeypatch.setattr(database, "SessionLocal", lambda: fake_db)
     monkeypatch.setattr(database, "GalleryImage", _FakeGalleryImage, raising=False)
     monkeypatch.setattr(

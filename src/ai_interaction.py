@@ -2167,7 +2167,7 @@ async def do_edit_generated_image(content: str, session_id: Optional[str] = None
                     return ""
 
             if img.get("b64_json"):
-                img_dir = Path("data/generated_images")
+                img_dir = Path(GENERATED_IMAGES_DIR)
                 img_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"{uuid.uuid4().hex[:12]}.png"
                 img_path = img_dir / filename
@@ -2178,7 +2178,7 @@ async def do_edit_generated_image(content: str, session_id: Optional[str] = None
                 try:
                     dl_resp = httpx.get(img["url"], timeout=60)
                     if dl_resp.status_code == 200:
-                        img_dir = Path("data/generated_images")
+                        img_dir = Path(GENERATED_IMAGES_DIR)
                         img_dir.mkdir(parents=True, exist_ok=True)
                         filename = f"{uuid.uuid4().hex[:12]}.png"
                         img_path = img_dir / filename
